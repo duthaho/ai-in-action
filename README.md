@@ -9,7 +9,8 @@ Each module includes deep technical explanations, working Python code, and exerc
 | # | Topic | Description |
 |---|-------|-------------|
 | 01 | [How LLMs Work](01-how-llms-work/) | Tokens, embeddings, attention, inference mechanics |
-| 02 | [Tool Use / Function Calling](02-tool-use/) | Bridging LLMs to real-world actions via structured tool calls |
+| 02 | [Embeddings & Vector Search](02-embeddings-vector-search/) | Embedding models, FAISS, semantic search, RAG pipeline |
+| 03 | [Tool Use / Function Calling](03-tool-use/) | Bridging LLMs to real-world actions via structured tool calls |
 
 ## Getting Started
 

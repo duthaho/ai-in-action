@@ -1,55 +1,45 @@
 """
-Embeddings & Vector Search — FastAPI Application
+Embeddings & Vector Search — Standalone Demo
 
-A complete RAG pipeline:
-1. Ingest documents → chunk → embed → store in FAISS
-2. Search by semantic similarity
-3. Ask questions with RAG (retrieve + generate)
+Walks through the core concepts interactively:
+1. Embed text and inspect vectors
+2. Compare semantic similarity between texts
+3. Chunk a document, embed chunks, store in FAISS
+4. Semantic search (retrieval)
+5. RAG: retrieve + generate with Claude
 
 Supports two embedding backends:
-- Voyage AI (recommended, higher quality) — requires VOYAGE_API_KEY
+- Voyage AI (higher quality) — requires VOYAGE_API_KEY
 - Local sentence-transformers (free, no API key) — good for learning
 
-Run: uvicorn app:app --reload --port 8001
+Run: python app.py
 """
 
 import os
 import time
-from contextlib import asynccontextmanager
 
 import anthropic
 import numpy as np
+from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
 
-from chunking import RecursiveChunker, Chunk
+from chunking import RecursiveChunker
 from vector_store import FaissVectorStore
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Embedding backend: "voyage" or "local"
 EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local")
 
-# Voyage AI settings
 VOYAGE_MODEL = "voyage-3-large"
 VOYAGE_DIMENSION = 1024
 
-# Local model settings (sentence-transformers)
 LOCAL_MODEL_NAME = "all-MiniLM-L6-v2"
 LOCAL_DIMENSION = 384
 
-# Chunking defaults
-DEFAULT_CHUNK_SIZE = 500
-DEFAULT_CHUNK_OVERLAP = 50
-
-# RAG settings
-TOP_K_DEFAULT = 5
-MIN_SIMILARITY_THRESHOLD = 0.3
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 
@@ -74,7 +64,6 @@ class VoyageBackend(EmbeddingBackend):
         self.dimension = VOYAGE_DIMENSION
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        # Voyage API supports batches of up to 128 texts
         all_embeddings = []
         for i in range(0, len(texts), 128):
             batch = texts[i:i + 128]
@@ -88,6 +77,7 @@ class LocalBackend(EmbeddingBackend):
 
     def __init__(self):
         from sentence_transformers import SentenceTransformer
+        print(f"Loading local model: {LOCAL_MODEL_NAME} ...")
         self.model = SentenceTransformer(LOCAL_MODEL_NAME)
         self.dimension = LOCAL_DIMENSION
 
@@ -103,274 +93,165 @@ def create_embedding_backend() -> EmbeddingBackend:
 
 
 # ---------------------------------------------------------------------------
-# Global state
+# Demo helpers
 # ---------------------------------------------------------------------------
 
-embedder: EmbeddingBackend = None
-store: FaissVectorStore = None
-chunker: RecursiveChunker = None
-claude_client: anthropic.Anthropic = None
-
-INDEX_DIR = "./index_data"
+def print_header(title: str):
+    print(f"\n{'=' * 60}")
+    print(f"  {title}")
+    print(f"{'=' * 60}\n")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize services on startup."""
-    global embedder, store, chunker, claude_client
+def print_separator():
+    print(f"\n{'-' * 60}\n")
 
-    print(f"Initializing embedding backend: {EMBEDDING_BACKEND}")
-    embedder = create_embedding_backend()
-    print(f"Embedding dimension: {embedder.dimension}")
 
-    # Load existing index or create new
-    if os.path.exists(os.path.join(INDEX_DIR, "index.faiss")):
-        print("Loading existing index...")
-        store = FaissVectorStore.load(INDEX_DIR)
-        print(f"Loaded {store.size} vectors")
-    else:
-        store = FaissVectorStore(dimension=embedder.dimension)
-        print("Created new empty index")
+# ---------------------------------------------------------------------------
+# Demo sections
+# ---------------------------------------------------------------------------
 
-    chunker = RecursiveChunker(
-        chunk_size=DEFAULT_CHUNK_SIZE,
-        chunk_overlap=DEFAULT_CHUNK_OVERLAP,
+def demo_embed(embedder: EmbeddingBackend):
+    """Show what an embedding vector looks like."""
+    print_header("1. What Does an Embedding Look Like?")
+
+    text = "The quick brown fox jumps over the lazy dog."
+    print(f"Text: \"{text}\"")
+
+    embedding = embedder.embed([text])[0]
+    print(f"Dimension: {len(embedding)}")
+    print(f"First 10 values: {[round(v, 4) for v in embedding[:10]]}")
+    print(f"Min: {min(embedding):.4f}, Max: {max(embedding):.4f}")
+
+    vec = np.array(embedding)
+    print(f"L2 norm: {np.linalg.norm(vec):.4f} (≈1.0 means normalized)")
+
+
+def demo_similarity(embedder: EmbeddingBackend):
+    """Compare semantic similarity between texts."""
+    print_header("2. Semantic Similarity")
+
+    texts = [
+        "How do I reset my password?",
+        "I forgot my login credentials",
+        "The weather is nice today",
+        "It's sunny outside",
+    ]
+
+    print("Texts:")
+    for i, t in enumerate(texts):
+        print(f"  [{i}] {t}")
+
+    embeddings = embedder.embed(texts)
+    vectors = np.array(embeddings, dtype=np.float32)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = vectors / norms
+    similarity_matrix = normalized @ normalized.T
+
+    print("\nPairwise cosine similarity:")
+    for i in range(len(texts)):
+        for j in range(i + 1, len(texts)):
+            score = similarity_matrix[i][j]
+            bar = "█" * int(score * 30)
+            print(f"  [{i}] vs [{j}]: {score:.4f}  {bar}")
+
+    print("\nNotice: semantically related texts score higher, even with")
+    print("different words ('password' vs 'login credentials').")
+
+
+def demo_chunking():
+    """Demonstrate text chunking strategies."""
+    print_header("3. Chunking a Document")
+
+    document = (
+        "Password Reset Instructions\n\n"
+        "To reset your password, go to the login page and click 'Forgot Password'. "
+        "Enter your email address and we'll send you a reset link. "
+        "The link expires in 24 hours.\n\n"
+        "Account Security\n\n"
+        "We recommend using a strong password with at least 12 characters. "
+        "Enable two-factor authentication for additional security. "
+        "Never share your password with anyone.\n\n"
+        "Contact Support\n\n"
+        "If you're still having trouble, email support@example.com or call 1-800-HELP. "
+        "Our support team is available 24/7."
     )
 
-    claude_client = anthropic.Anthropic()
+    chunker = RecursiveChunker(chunk_size=200, chunk_overlap=30)
+    chunks = chunker.chunk(document, source="help-center/password.md")
 
-    yield
+    print(f"Document length: {len(document)} chars")
+    print(f"Chunks created: {len(chunks)}")
+    print()
 
-    # Save index on shutdown
-    if store.size > 0:
-        store.save(INDEX_DIR)
-        print(f"Saved {store.size} vectors to {INDEX_DIR}")
+    for chunk in chunks:
+        print(f"  Chunk {chunk.index} ({len(chunk.text)} chars):")
+        preview = chunk.text[:80].replace("\n", " ")
+        print(f"    \"{preview}...\"")
 
-
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
-
-app = FastAPI(
-    title="Embeddings & Vector Search API",
-    description="RAG pipeline: ingest documents, search semantically, ask questions",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+    return document, chunker
 
 
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
+def demo_search(embedder: EmbeddingBackend, document: str, chunker):
+    """Chunk, embed, store, and search."""
+    print_header("4. Semantic Search (Retrieval)")
 
-class DocumentInput(BaseModel):
-    """A document to ingest into the vector store."""
-    content: str = Field(..., min_length=1, description="The document text")
-    source: str = Field(default="", description="Document identifier (filename, URL, etc.)")
-    metadata: dict = Field(default_factory=dict, description="Additional metadata")
-
-
-class SearchQuery(BaseModel):
-    query: str = Field(..., min_length=1)
-    top_k: int = Field(default=TOP_K_DEFAULT, ge=1, le=50)
-    min_score: float = Field(default=MIN_SIMILARITY_THRESHOLD, ge=0.0, le=1.0)
-
-
-class AskQuery(BaseModel):
-    question: str = Field(..., min_length=1)
-    top_k: int = Field(default=TOP_K_DEFAULT, ge=1, le=20)
-
-
-class SearchResultResponse(BaseModel):
-    text: str
-    source: str
-    score: float
-    chunk_index: int
-
-
-class SearchResponse(BaseModel):
-    query: str
-    results: list[SearchResultResponse]
-    search_time_ms: float
-
-
-class AskResponse(BaseModel):
-    question: str
-    answer: str
-    sources: list[SearchResultResponse]
-    search_time_ms: float
-    generation_time_ms: float
-
-
-class IngestResponse(BaseModel):
-    source: str
-    chunks_created: int
-    total_vectors: int
-
-
-class EmbedResponse(BaseModel):
-    """Response for the /embed endpoint — useful for learning."""
-    text: str
-    embedding: list[float]
-    dimension: int
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "healthy",
-        "embedding_backend": EMBEDDING_BACKEND,
-        "dimension": embedder.dimension,
-        "vectors_indexed": store.size,
-    }
-
-
-@app.get("/stats")
-async def stats():
-    """Index statistics."""
-    return {
-        "total_vectors": store.size,
-        "dimension": embedder.dimension,
-        "embedding_backend": EMBEDDING_BACKEND,
-        "index_persisted": os.path.exists(os.path.join(INDEX_DIR, "index.faiss")),
-    }
-
-
-@app.post("/embed", response_model=EmbedResponse)
-async def embed_text(text: str):
-    """
-    Embed a single text and return the vector.
-
-    Useful for understanding what embeddings look like and for debugging.
-    In production, you wouldn't expose this directly.
-    """
-    embeddings = embedder.embed([text])
-    return EmbedResponse(
-        text=text,
-        embedding=embeddings[0],
-        dimension=len(embeddings[0]),
-    )
-
-
-@app.post("/documents", response_model=IngestResponse)
-async def ingest_document(doc: DocumentInput):
-    """
-    Ingest a document: chunk it, embed each chunk, store in the vector index.
-
-    This is the "indexing" side of the RAG pipeline.
-    """
-    # Step 1: Chunk the document
-    chunks = chunker.chunk(doc.content, source=doc.source)
-
-    if not chunks:
-        raise HTTPException(status_code=400, detail="Document produced no chunks")
-
-    # Step 2: Embed all chunks in one batch (efficient)
+    # Build the index
+    chunks = chunker.chunk(document, source="help-center/password.md")
     texts = [c.text for c in chunks]
     embeddings = embedder.embed(texts)
 
-    # Step 3: Store in vector index with metadata
+    store = FaissVectorStore(dimension=embedder.dimension)
     metadata_list = [
-        {
-            "text": chunk.text,
-            "source": doc.source or "unknown",
-            "chunk_index": chunk.index,
-            **doc.metadata,
-        }
+        {"text": chunk.text, "source": chunk.source, "chunk_index": chunk.index}
         for chunk in chunks
     ]
     store.add_batch(embeddings, metadata_list)
+    print(f"Indexed {store.size} chunks into FAISS\n")
 
-    return IngestResponse(
-        source=doc.source,
-        chunks_created=len(chunks),
-        total_vectors=store.size,
-    )
+    # Search
+    queries = [
+        "How do I change my login credentials?",
+        "What phone number can I call for help?",
+    ]
 
+    for query in queries:
+        print(f"Query: \"{query}\"")
+        start = time.perf_counter()
+        query_embedding = embedder.embed([query])[0]
+        results = store.search(query_embedding, top_k=2, min_score=0.0)
+        elapsed_ms = (time.perf_counter() - start) * 1000
 
-@app.get("/documents")
-async def list_documents():
-    """List all unique document sources in the index."""
-    sources = set()
-    for meta in store.metadata_store.values():
-        sources.add(meta.get("source", "unknown"))
-    return {"sources": sorted(sources), "total_vectors": store.size}
+        for r in results:
+            text_preview = r.metadata["text"][:80].replace("\n", " ")
+            print(f"  Score: {r.score:.4f} | \"{text_preview}...\"")
+        print(f"  ({elapsed_ms:.1f}ms)\n")
 
-
-@app.post("/search", response_model=SearchResponse)
-async def search(query: SearchQuery):
-    """
-    Semantic search: find the most similar chunks to the query.
-
-    This is the "retrieval" step of RAG — no LLM involved yet.
-    """
-    if store.size == 0:
-        raise HTTPException(status_code=400, detail="Index is empty. Ingest documents first.")
-
-    start = time.perf_counter()
-
-    # Embed the query
-    query_embedding = embedder.embed([query.query])[0]
-
-    # Search the vector store
-    results = store.search(
-        query_embedding=query_embedding,
-        top_k=query.top_k,
-        min_score=query.min_score,
-    )
-
-    elapsed_ms = (time.perf_counter() - start) * 1000
-
-    return SearchResponse(
-        query=query.query,
-        results=[
-            SearchResultResponse(
-                text=r.metadata.get("text", ""),
-                source=r.metadata.get("source", ""),
-                score=round(r.score, 4),
-                chunk_index=r.metadata.get("chunk_index", -1),
-            )
-            for r in results
-        ],
-        search_time_ms=round(elapsed_ms, 2),
-    )
+    return store
 
 
-@app.post("/ask", response_model=AskResponse)
-async def ask(query: AskQuery):
-    """
-    RAG endpoint: retrieve relevant chunks, then ask Claude to answer
-    based on the retrieved context.
+def demo_rag(embedder: EmbeddingBackend, store: FaissVectorStore):
+    """Full RAG: retrieve context, then generate answer with Claude."""
+    print_header("5. RAG — Retrieve & Generate")
 
-    This is the full RAG pipeline: embed query → search → build prompt → generate.
-    """
-    if store.size == 0:
-        raise HTTPException(status_code=400, detail="Index is empty. Ingest documents first.")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("Skipping RAG demo — ANTHROPIC_API_KEY not set.")
+        print("Set it in .env to see the full RAG pipeline in action.")
+        return
 
-    # Step 1: Retrieve
-    search_start = time.perf_counter()
-    query_embedding = embedder.embed([query.question])[0]
-    results = store.search(
-        query_embedding=query_embedding,
-        top_k=query.top_k,
-        min_score=MIN_SIMILARITY_THRESHOLD,
-    )
-    search_ms = (time.perf_counter() - search_start) * 1000
+    question = "How do I reset my password and how long is the link valid?"
+    print(f"Question: \"{question}\"\n")
 
-    if not results:
-        return AskResponse(
-            question=query.question,
-            answer="I couldn't find any relevant information in the indexed documents.",
-            sources=[],
-            search_time_ms=round(search_ms, 2),
-            generation_time_ms=0,
-        )
+    # Retrieve
+    query_embedding = embedder.embed([question])[0]
+    results = store.search(query_embedding, top_k=3, min_score=0.3)
 
-    # Step 2: Build context from retrieved chunks
+    print(f"Retrieved {len(results)} chunks:")
+    for r in results:
+        preview = r.metadata["text"][:60].replace("\n", " ")
+        print(f"  [{r.score:.4f}] \"{preview}...\"")
+
+    # Build context
     context_parts = []
     for i, r in enumerate(results, 1):
         source = r.metadata.get("source", "unknown")
@@ -378,11 +259,13 @@ async def ask(query: AskQuery):
         context_parts.append(f"[Source {i}: {source} (relevance: {r.score:.2f})]\n{text}")
     context = "\n\n---\n\n".join(context_parts)
 
-    # Step 3: Generate answer with Claude
-    gen_start = time.perf_counter()
-    response = claude_client.messages.create(
+    # Generate
+    print("\nGenerating answer with Claude...\n")
+    client = anthropic.Anthropic()
+    start = time.perf_counter()
+    response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=1024,
+        max_tokens=512,
         system=(
             "You are a helpful assistant that answers questions based on provided documentation. "
             "Only answer based on the provided context. If the context doesn't contain enough "
@@ -391,73 +274,43 @@ async def ask(query: AskQuery):
         messages=[
             {
                 "role": "user",
-                "content": (
-                    f"Context from documentation:\n\n{context}\n\n"
-                    f"---\n\nQuestion: {query.question}"
-                ),
+                "content": f"Context from documentation:\n\n{context}\n\n---\n\nQuestion: {question}",
             }
         ],
     )
-    gen_ms = (time.perf_counter() - gen_start) * 1000
+    gen_ms = (time.perf_counter() - start) * 1000
 
-    answer = response.content[0].text
-
-    return AskResponse(
-        question=query.question,
-        answer=answer,
-        sources=[
-            SearchResultResponse(
-                text=r.metadata.get("text", ""),
-                source=r.metadata.get("source", ""),
-                score=round(r.score, 4),
-                chunk_index=r.metadata.get("chunk_index", -1),
-            )
-            for r in results
-        ],
-        search_time_ms=round(search_ms, 2),
-        generation_time_ms=round(gen_ms, 2),
-    )
+    print(f"Answer ({gen_ms:.0f}ms):")
+    print(f"  {response.content[0].text}")
 
 
-@app.post("/compare-similarity")
-async def compare_similarity(texts: list[str]):
-    """
-    Compare similarity between multiple texts.
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
-    Educational endpoint: embed multiple texts and show their pairwise
-    cosine similarities. Great for building intuition about embeddings.
-    """
-    if len(texts) < 2:
-        raise HTTPException(status_code=400, detail="Provide at least 2 texts")
-    if len(texts) > 10:
-        raise HTTPException(status_code=400, detail="Maximum 10 texts")
+def main():
+    print_header("Embeddings & Vector Search Demo")
+    print(f"Backend: {EMBEDDING_BACKEND}")
 
-    embeddings = embedder.embed(texts)
-    vectors = np.array(embeddings, dtype=np.float32)
+    embedder = create_embedding_backend()
+    print(f"Dimension: {embedder.dimension}")
 
-    # Normalize for cosine similarity
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    normalized = vectors / norms
+    demo_embed(embedder)
+    print_separator()
 
-    # Pairwise cosine similarity matrix
-    similarity_matrix = (normalized @ normalized.T).tolist()
+    demo_similarity(embedder)
+    print_separator()
 
-    # Format as pairs
-    pairs = []
-    for i in range(len(texts)):
-        for j in range(i + 1, len(texts)):
-            pairs.append({
-                "text_a": texts[i],
-                "text_b": texts[j],
-                "similarity": round(similarity_matrix[i][j], 4),
-            })
+    document, chunker = demo_chunking()
+    print_separator()
 
-    # Sort by similarity descending
-    pairs.sort(key=lambda x: x["similarity"], reverse=True)
+    store = demo_search(embedder, document, chunker)
+    print_separator()
 
-    return {
-        "pairs": pairs,
-        "similarity_matrix": [
-            [round(v, 4) for v in row] for row in similarity_matrix
-        ],
-    }
+    demo_rag(embedder, store)
+
+    print_header("Done!")
+
+
+if __name__ == "__main__":
+    main()

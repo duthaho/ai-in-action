@@ -30,19 +30,14 @@ cd learn-ai
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Enter a module and install its dependencies
-cd 01-how-llms-work
+# Install all dependencies
 cp .env.example .env      # add your API key
 pip install -r requirements.txt
 
-# Run the app
+# Run any module
+cd 01-how-llms-work
 python app.py
-
-# Run tests
-pytest
 ```
-
-Each module is self-contained with its own `requirements.txt`, `.env.example`, and tests.
 
 ## Module Structure
 
@@ -51,10 +46,7 @@ Every module follows a consistent layout:
 ```
 XX-module-name/
 ├── README.md           # Deep-dive technical guide
-├── app.py              # Working implementation
-├── requirements.txt    # Module dependencies
-├── .env.example        # Required environment variables
-└── test_*.py           # Tests and exercises
+└── app.py              # Standalone demo
 ```
 
 ## License

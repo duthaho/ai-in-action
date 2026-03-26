@@ -1,38 +1,26 @@
 """
-Tool Use / Function Calling — Hands-on FastAPI Service
+Tool Use / Function Calling — Standalone Demo
 
-Demonstrates the complete tool use lifecycle:
-1. Defining tools as JSON schemas
-2. Sending tools to the Claude API
-3. The agentic loop — detecting and executing tool calls
-4. Feeding results back for final response generation
-5. Multi-turn conversations with tool history
-6. Parallel tool calls (model requests multiple tools at once)
+Walks through the complete tool use lifecycle:
+1. Inspect tool definitions — what the model sees
+2. Single-turn tool use with the agentic loop
+3. Multi-tool calls — model requests multiple tools at once
+4. Force tool use — require a specific tool
+5. No tool needed — model responds directly
+6. Multi-turn conversation with tool history
+
+Run: python app.py
 """
 
 import os
-from contextlib import asynccontextmanager
 
 import anthropic
+from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from pydantic import BaseModel
 
 from tools import TOOL_DEFINITIONS, execute_tool
 
-load_dotenv()
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize the Anthropic client on startup."""
-    app.state.client = anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-    )
-    yield
-
-
-app = FastAPI(title="Tool Use / Function Calling", lifespan=lifespan)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 MODEL = "claude-sonnet-4-20250514"
 
@@ -47,40 +35,36 @@ If you need multiple pieces of information, request all relevant tools."""
 
 
 # ---------------------------------------------------------------------------
-# 1. Single-turn tool use — the fundamental building block
+# Helpers
 # ---------------------------------------------------------------------------
-class ChatRequest(BaseModel):
-    message: str
-    max_iterations: int = 10  # safety limit for the agentic loop
+
+def print_header(title: str):
+    print(f"\n{'=' * 60}")
+    print(f"  {title}")
+    print(f"{'=' * 60}\n")
 
 
-@app.post("/chat")
-async def chat(req: ChatRequest):
+def print_separator():
+    print(f"\n{'-' * 60}\n")
+
+
+def run_agentic_loop(
+    client: anthropic.Anthropic,
+    messages: list[dict],
+    max_iterations: int = 10,
+) -> dict:
     """
-    Complete tool use implementation with the agentic loop.
-
-    This is the core pattern you'll use in every tool-use application:
-    1. Send user message + tool definitions to the model
+    The core agentic loop pattern:
+    1. Send messages + tool definitions to the model
     2. If model wants to use tools → execute them → send results back
     3. Repeat until model produces a final text response
-
-    The max_iterations guard prevents infinite loops (a real production concern).
     """
-    client: anthropic.Anthropic = app.state.client
-
-    messages = [{"role": "user", "content": req.message}]
-
-    # Track the full interaction for observability
     tool_calls_log = []
     iteration = 0
 
-    # === THE AGENTIC LOOP ===
-    # This is the most important pattern in tool use.
-    # The model may need multiple rounds of tool calls to answer one question.
-    while iteration < req.max_iterations:
+    while iteration < max_iterations:
         iteration += 1
 
-        # Call the model with our tools
         response = client.messages.create(
             model=MODEL,
             max_tokens=1024,
@@ -91,118 +75,16 @@ async def chat(req: ChatRequest):
 
         # Case 1: Model is done — produced a final text response
         if response.stop_reason == "end_turn":
-            final_text = ""
-            for block in response.content:
-                if block.type == "text":
-                    final_text += block.text
+            final_text = "".join(
+                b.text for b in response.content if b.type == "text"
+            )
             return {
                 "response": final_text,
                 "tool_calls": tool_calls_log,
                 "iterations": iteration,
-                "usage": {
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                },
             }
 
         # Case 2: Model wants to use tools
-        if response.stop_reason == "tool_use":
-            # The assistant message may contain BOTH text and tool_use blocks.
-            # We must append the ENTIRE assistant message to maintain conversation flow.
-            messages.append({"role": "assistant", "content": response.content})
-
-            # Process each tool call in this response
-            # (Claude can request multiple tools in parallel!)
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    # Execute the tool
-                    result = execute_tool(block.name, block.input)
-
-                    tool_calls_log.append({
-                        "iteration": iteration,
-                        "tool": block.name,
-                        "input": block.input,
-                        "result": result,
-                    })
-
-                    # Format as tool_result for the API
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,  # MUST match the tool_use block
-                        "content": result,
-                    })
-
-            # Send ALL tool results back in a single user message
-            messages.append({"role": "user", "content": tool_results})
-
-            # Loop continues — model will see results and decide what to do next
-
-    # Safety: hit max iterations
-    return {
-        "response": "I wasn't able to complete your request within the allowed steps.",
-        "tool_calls": tool_calls_log,
-        "iterations": iteration,
-        "error": "max_iterations_reached",
-    }
-
-
-# ---------------------------------------------------------------------------
-# 2. Multi-turn conversation — tool use with conversation history
-# ---------------------------------------------------------------------------
-class ConversationMessage(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
-
-
-class ConversationRequest(BaseModel):
-    messages: list[ConversationMessage]
-    max_iterations: int = 10
-
-
-@app.post("/conversation")
-async def conversation(req: ConversationRequest):
-    """
-    Multi-turn conversation with tool use.
-
-    In production, you'd store conversation history in a database.
-    The model sees the FULL history, including previous tool calls,
-    which lets it reference earlier results without re-calling tools.
-
-    Key insight: tool_use and tool_result messages are part of the
-    conversation history. If you strip them out, the model loses
-    context about what data it already has.
-    """
-    client: anthropic.Anthropic = app.state.client
-
-    # Convert simple messages to API format
-    messages = [{"role": m.role, "content": m.content} for m in req.messages]
-
-    tool_calls_log = []
-    iteration = 0
-
-    while iteration < req.max_iterations:
-        iteration += 1
-
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=TOOL_DEFINITIONS,
-            messages=messages,
-        )
-
-        if response.stop_reason == "end_turn":
-            final_text = ""
-            for block in response.content:
-                if block.type == "text":
-                    final_text += block.text
-            return {
-                "response": final_text,
-                "tool_calls": tool_calls_log,
-                "iterations": iteration,
-            }
-
         if response.stop_reason == "tool_use":
             messages.append({"role": "assistant", "content": response.content})
 
@@ -224,74 +106,168 @@ async def conversation(req: ConversationRequest):
 
             messages.append({"role": "user", "content": tool_results})
 
-    return {"response": "Max iterations reached.", "tool_calls": tool_calls_log}
-
-
-# ---------------------------------------------------------------------------
-# 3. Inspect tool definitions — see exactly what the model sees
-# ---------------------------------------------------------------------------
-@app.get("/tools")
-async def list_tools():
-    """
-    Returns the tool definitions sent to the model.
-
-    Use this to understand what the model "sees" when deciding
-    which tool to call. The description quality is the #1 factor
-    in tool selection accuracy.
-    """
     return {
-        "tools": TOOL_DEFINITIONS,
-        "count": len(TOOL_DEFINITIONS),
-        "tip": (
-            "These exact schemas are injected into the model's context. "
-            "Better descriptions = better tool selection."
-        ),
+        "response": "Max iterations reached.",
+        "tool_calls": tool_calls_log,
+        "iterations": iteration,
     }
 
 
 # ---------------------------------------------------------------------------
-# 4. Force tool use — require the model to use a specific tool
+# Demo sections
 # ---------------------------------------------------------------------------
-class ForceToolRequest(BaseModel):
-    message: str
-    tool_name: str  # must match a tool in TOOL_DEFINITIONS
+
+def demo_tool_definitions():
+    """Show the tool schemas that the model receives."""
+    print_header("1. Tool Definitions — What the Model Sees")
+
+    print(f"  {len(TOOL_DEFINITIONS)} tools registered:\n")
+    for tool in TOOL_DEFINITIONS:
+        required = tool["input_schema"].get("required", [])
+        optional = [
+            k for k in tool["input_schema"]["properties"]
+            if k not in required
+        ]
+        print(f"  Tool: {tool['name']}")
+        print(f"    Description: {tool['description'][:80]}...")
+        print(f"    Required: {required}")
+        print(f"    Optional: {optional}")
+        print()
+
+    print("  These exact schemas are injected into the model's context.")
+    print("  Better descriptions = better tool selection accuracy.")
 
 
-@app.post("/force-tool")
-async def force_tool(req: ForceToolRequest):
-    """
-    Demonstrates tool_choice parameter to FORCE the model to use a tool.
+def demo_single_tool(client: anthropic.Anthropic):
+    """Weather query triggers get_weather tool."""
+    print_header("2. Single Tool — Weather Query")
 
-    Options:
-    - {"type": "auto"}  → model decides (default)
-    - {"type": "any"}   → model must use SOME tool
-    - {"type": "tool", "name": "get_weather"} → must use THIS tool
+    message = "What's the weather like in Tokyo right now?"
+    print(f"  User: \"{message}\"\n")
 
-    Use 'any' or specific tool when you KNOW a tool call is needed
-    and don't want the model to skip it.
-    """
-    client: anthropic.Anthropic = app.state.client
-    messages = [{"role": "user", "content": req.message}]
+    result = run_agentic_loop(
+        client,
+        [{"role": "user", "content": message}],
+    )
 
-    # Force the model to use the specified tool
+    for tc in result["tool_calls"]:
+        print(f"  Tool call: {tc['tool']}({tc['input']})")
+        print(f"    → {tc['result']}")
+    print(f"\n  Response: {result['response'][:200]}")
+    print(f"  Iterations: {result['iterations']}")
+
+
+def demo_order_lookup(client: anthropic.Anthropic):
+    """Order query triggers search_orders tool."""
+    print_header("3. Order Lookup — search_orders Tool")
+
+    message = "Can you check what orders bob@example.com has? Any pending ones?"
+    print(f"  User: \"{message}\"\n")
+
+    result = run_agentic_loop(
+        client,
+        [{"role": "user", "content": message}],
+    )
+
+    for tc in result["tool_calls"]:
+        print(f"  Tool call: {tc['tool']}({tc['input']})")
+        print(f"    → {tc['result'][:100]}")
+    print(f"\n  Response: {result['response'][:300]}")
+
+
+def demo_calculation(client: anthropic.Anthropic):
+    """Math query triggers calculate tool."""
+    print_header("4. Calculation — LLMs Can't Do Math")
+
+    message = "What is 1847 multiplied by 293, plus 15?"
+    print(f"  User: \"{message}\"\n")
+
+    result = run_agentic_loop(
+        client,
+        [{"role": "user", "content": message}],
+    )
+
+    for tc in result["tool_calls"]:
+        print(f"  Tool call: {tc['tool']}({tc['input']})")
+        print(f"    → {tc['result']}")
+    print(f"\n  Response: {result['response'][:200]}")
+    print("\n  Key insight: LLMs are unreliable at arithmetic.")
+    print("  Always delegate math to a tool.")
+
+
+def demo_multi_tool(client: anthropic.Anthropic):
+    """Multiple tools in one request — model calls them in parallel."""
+    print_header("5. Multi-Tool — Parallel Tool Calls")
+
+    message = (
+        "I need three things: "
+        "1) Weather in Tokyo and London, "
+        "2) All orders for alice@example.com, "
+        "3) Calculate the total of 149.99 + 49.99"
+    )
+    print(f"  User: \"{message}\"\n")
+
+    result = run_agentic_loop(
+        client,
+        [{"role": "user", "content": message}],
+    )
+
+    print(f"  Tool calls ({len(result['tool_calls'])} total):")
+    for tc in result["tool_calls"]:
+        print(f"    [{tc['iteration']}] {tc['tool']}({tc['input']})")
+    print(f"\n  Response: {result['response'][:400]}")
+    print(f"  Iterations: {result['iterations']}")
+    print("\n  Notice: Claude can request multiple tools in one turn (parallel calls).")
+
+
+def demo_no_tool(client: anthropic.Anthropic):
+    """Simple chat — model decides no tool is needed."""
+    print_header("6. No Tool Needed — Model Responds Directly")
+
+    message = "Hello! How are you today?"
+    print(f"  User: \"{message}\"\n")
+
+    result = run_agentic_loop(
+        client,
+        [{"role": "user", "content": message}],
+    )
+
+    print(f"  Response: {result['response'][:200]}")
+    print(f"  Tool calls: {len(result['tool_calls'])} (should be 0)")
+    print(f"  Iterations: {result['iterations']} (should be 1)")
+    print("\n  The model only calls tools when it needs external data.")
+
+
+def demo_force_tool(client: anthropic.Anthropic):
+    """Force the model to use a specific tool via tool_choice."""
+    print_header("7. Force Tool — tool_choice Parameter")
+
+    message = "Tell me about Paris."
+    tool_name = "get_weather"
+    print(f"  User: \"{message}\"")
+    print(f"  Forcing tool: {tool_name}\n")
+
+    messages = [{"role": "user", "content": message}]
+
+    # Force the model to call get_weather
     response = client.messages.create(
         model=MODEL,
         max_tokens=1024,
         system=SYSTEM_PROMPT,
         tools=TOOL_DEFINITIONS,
-        tool_choice={"type": "tool", "name": req.tool_name},
+        tool_choice={"type": "tool", "name": tool_name},
         messages=messages,
     )
 
     # Execute the forced tool call
     messages.append({"role": "assistant", "content": response.content})
     tool_results = []
-    tool_info = None
 
     for block in response.content:
         if block.type == "tool_use":
             result = execute_tool(block.name, block.input)
-            tool_info = {"tool": block.name, "input": block.input, "result": result}
+            print(f"  Forced call: {block.name}({block.input})")
+            print(f"    → {result}")
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
@@ -300,7 +276,7 @@ async def force_tool(req: ForceToolRequest):
 
     messages.append({"role": "user", "content": tool_results})
 
-    # Let the model generate a final response using the tool result
+    # Let the model generate a final response
     final = client.messages.create(
         model=MODEL,
         max_tokens=1024,
@@ -309,18 +285,91 @@ async def force_tool(req: ForceToolRequest):
         messages=messages,
     )
 
-    final_text = ""
-    for block in final.content:
-        if block.type == "text":
-            final_text += block.text
+    final_text = "".join(b.text for b in final.content if b.type == "text")
+    print(f"\n  Response: {final_text[:200]}")
 
-    return {
-        "response": final_text,
-        "forced_tool_call": tool_info,
-    }
+    print("\n  tool_choice options:")
+    print('    {"type": "auto"}  → model decides (default)')
+    print('    {"type": "any"}   → must use SOME tool')
+    print('    {"type": "tool", "name": "..."} → must use THIS tool')
+
+
+def demo_multi_turn(client: anthropic.Anthropic):
+    """Multi-turn conversation where context carries across turns."""
+    print_header("8. Multi-Turn Conversation")
+
+    # Turn 1
+    print("  --- Turn 1 ---")
+    message1 = "What's the weather in Sydney?"
+    print(f"  User: \"{message1}\"\n")
+
+    result1 = run_agentic_loop(
+        client,
+        [{"role": "user", "content": message1}],
+    )
+    print(f"  Assistant: {result1['response'][:150]}")
+    print(f"  Tools: {[tc['tool'] for tc in result1['tool_calls']]}")
+
+    # Turn 2 — references previous context
+    print(f"\n  --- Turn 2 ---")
+    message2 = "How about in London? Is it warmer or colder than Sydney?"
+    print(f"  User: \"{message2}\"\n")
+
+    result2 = run_agentic_loop(
+        client,
+        [
+            {"role": "user", "content": message1},
+            {"role": "assistant", "content": result1["response"]},
+            {"role": "user", "content": message2},
+        ],
+    )
+    print(f"  Assistant: {result2['response'][:200]}")
+    print(f"  Tools: {[tc['tool'] for tc in result2['tool_calls']]}")
+
+    print("\n  The model sees full history including previous tool results,")
+    print("  so it can compare data across turns without re-calling tools.")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    print_header("Tool Use / Function Calling — Demo")
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("ANTHROPIC_API_KEY not set. Set it in .env to run this demo.")
+        demo_tool_definitions()
+        return
+
+    client = anthropic.Anthropic()
+
+    demo_tool_definitions()
+    print_separator()
+
+    demo_single_tool(client)
+    print_separator()
+
+    demo_order_lookup(client)
+    print_separator()
+
+    demo_calculation(client)
+    print_separator()
+
+    demo_multi_tool(client)
+    print_separator()
+
+    demo_no_tool(client)
+    print_separator()
+
+    demo_force_tool(client)
+    print_separator()
+
+    demo_multi_turn(client)
+
+    print_header("Done!")
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    main()

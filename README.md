@@ -1,4 +1,4 @@
-# Learn AI Engineering
+# AI in Action
 
 A hands-on, module-based curriculum for backend developers learning AI engineering — from LLM fundamentals to production-ready systems.
 
@@ -11,6 +11,7 @@ Each module includes deep technical explanations, working Python code, and exerc
 | 01 | [How LLMs Work](01-how-llms-work/) | Tokens, embeddings, attention, inference mechanics |
 | 02 | [Embeddings & Vector Search](02-embeddings-vector-search/) | Embedding models, FAISS, semantic search, RAG pipeline |
 | 03 | [Tool Use / Function Calling](03-tool-use/) | Bridging LLMs to real-world actions via structured tool calls |
+| 04 | [RAG (Retrieval-Augmented Generation)](04-rag/) | Grounding LLMs in your own data with search + generate |
 
 ## Getting Started
 
@@ -23,8 +24,8 @@ Each module includes deep technical explanations, working Python code, and exerc
 
 ```bash
 # Clone the repo
-git clone <repo-url> learn-ai
-cd learn-ai
+git clone <repo-url> ai-in-action
+cd ai-in-action
 
 # Create a virtual environment
 python -m venv .venv

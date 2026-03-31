@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Learn AI Engineering</title>
+<title>AI in Action</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<h1>// Learn AI Engineering</h1>
+<h1>// AI in Action</h1>
 <p class="subtitle">A hands-on, module-based curriculum for backend developers — from LLM fundamentals to production-ready systems</p>
 
 <h2><span class="num">00.</span> Modules</h2>
@@ -55,6 +55,19 @@
     </div>
   </a>
 
+  <a href="04-rag/index.html" class="module-card">
+    <div class="module-num">Module 04</div>
+    <h3>RAG — Retrieval-Augmented Generation</h3>
+    <p>Ground LLMs in your own data. Build the full pipeline: document loading, chunking, embedding, vector search, prompt construction, and generation with citations. The pattern behind every production AI assistant.</p>
+    <div class="module-tags">
+      <span class="module-tag">RAG</span>
+      <span class="module-tag">retrieval</span>
+      <span class="module-tag">chunking</span>
+      <span class="module-tag">grounding</span>
+      <span class="module-tag">citations</span>
+    </div>
+  </a>
+
 </div>
 
 <h2><span class="num">01.</span> Getting Started</h2>
@@ -93,10 +106,17 @@ python app.py</div>
 │   ├── chunking.py       <span class="comment"># Text chunking strategies</span>
 │   └── vector_store.py   <span class="comment"># FAISS vector store</span>
 │
-└── 03-tool-use/
+├── 03-tool-use/
+│   ├── index.html        <span class="comment"># Deep-dive guide</span>
+│   ├── app.py            <span class="comment"># Standalone demo</span>
+│   └── tools.py          <span class="comment"># Tool definitions + implementations</span>
+│
+└── 04-rag/
     ├── index.html        <span class="comment"># Deep-dive guide</span>
-    ├── app.py            <span class="comment"># Standalone demo</span>
-    └── tools.py          <span class="comment"># Tool definitions + implementations</span></div>
+    ├── app.py            <span class="comment"># Full RAG pipeline demo</span>
+    ├── chunking.py       <span class="comment"># Text chunking strategies</span>
+    ├── vector_store.py   <span class="comment"># FAISS vector store</span>
+    └── docs/             <span class="comment"># Sample documents to index</span></div>
 
 </body>
 </html>

@@ -16,7 +16,7 @@ Each module has two parts:
 | 02 | [Prompt Engineering](02-prompt-engineering/) | Prompt Testing Workbench |
 | 03 | [Embeddings & Vector Search](03-embeddings-vector-search/) | Semantic Search Engine |
 | 04 | [The AI API Layer](04-ai-api-layer/) | LLM API Explorer |
-| 05 | Streaming & Real-Time AI *(coming soon)* | |
+| 05 | [Streaming & Real-Time AI](05-streaming-realtime-ai/) | Streaming Chat |
 
 ### Phase 2: Core AI Engineering
 

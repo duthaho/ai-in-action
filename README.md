@@ -32,7 +32,7 @@ Each module has two parts:
 
 | # | Module | Project |
 |---|--------|---------|
-| 11 | Building AI Agents *(coming soon)* | |
+| 11 | [Building AI Agents](11-building-ai-agents/) | Research Assistant |
 | 12 | Multi-Agent Systems *(coming soon)* | |
 | 13 | Workflows & Chains *(coming soon)* | |
 | 14 | AI Code Generation *(coming soon)* | |
